@@ -38,6 +38,12 @@ internal partial class DbContextOptimizeCommand
             throw new CommandException(Resources.VersionRequired("6.0.0"));
         }
 
+        if ((_precompileQueries!.HasValue() || _nativeAot!.HasValue())
+            && new SemanticVersionComparer().Compare(executor.EFCoreVersion, "9.0.0") < 0)
+        {
+            throw new CommandException(Resources.VersionRequired("9.0.0"));
+        }
+
         var result = executor.OptimizeContext(
             _outputDir!.Value(),
             _namespace!.Value(),
