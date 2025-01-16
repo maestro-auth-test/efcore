@@ -6,8 +6,9 @@ using Microsoft.DotNet.Cli.CommandLine;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.Tools.Properties;
 #if NET472
-using System;
 using System.Configuration;
+#else
+using System.Runtime.Loader;
 #endif
 
 namespace Microsoft.EntityFrameworkCore.Tools.Commands
@@ -20,6 +21,7 @@ namespace Microsoft.EntityFrameworkCore.Tools.Commands
         private CommandOption? _language;
         private CommandOption? _nullable;
         private string? _efcoreVersion;
+        private CommandOption? _designAssembly;
 
         protected CommandOption? Assembly { get; private set; }
         protected CommandOption? Project { get; private set; }
@@ -29,10 +31,61 @@ namespace Microsoft.EntityFrameworkCore.Tools.Commands
         protected CommandOption? Framework { get; private set; }
         protected CommandOption? Configuration { get; private set; }
 
+#if !NET472
+        private AssemblyLoadContext? _assemblyLoadContext;
+        protected AssemblyLoadContext AssemblyLoadContext
+        {
+            get
+            {
+                if (_assemblyLoadContext != null)
+                {
+                    return _assemblyLoadContext;
+                }
+
+                if (_designAssembly!.Value() != null)
+                {
+                    AssemblyLoadContext.Default.Resolving += (context, name) =>
+                    {
+                        var assemblyPath = Path.GetDirectoryName(_designAssembly!.Value())!;
+                        assemblyPath = Path.Combine(assemblyPath, name.Name + ".dll");
+                        return File.Exists(assemblyPath) ? context.LoadFromAssemblyPath(assemblyPath) : null;
+                    };
+                    _assemblyLoadContext = AssemblyLoadContext.Default;
+                }
+
+                return AssemblyLoadContext.Default;
+            }
+        }
+#endif
+
         protected string? EFCoreVersion
-            => _efcoreVersion ??= System.Reflection.Assembly.Load("Microsoft.EntityFrameworkCore.Design")
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-                ?.InformationalVersion;
+        {
+            get
+            {
+                if (_efcoreVersion != null)
+                {
+                    return _efcoreVersion;
+                }
+
+                Assembly? assembly = null;
+#if !NET472
+                assembly = AssemblyLoadContext.LoadFromAssemblyName(new AssemblyName("Microsoft.EntityFrameworkCore.Design"));
+#else
+                if (_designAssembly!.Value() != null)
+                {
+                    var assemblyPath = Path.GetDirectoryName(_designAssembly!.Value());
+                    assemblyPath = Path.Combine(assemblyPath, "Microsoft.EntityFrameworkCore.Design.dll");
+                    assembly = System.Reflection.Assembly.LoadFrom(assemblyPath);
+                } else
+                {
+                    assembly = System.Reflection.Assembly.Load("Microsoft.EntityFrameworkCore.Design");
+                }
+#endif
+                _efcoreVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                        ?.InformationalVersion;
+                return _efcoreVersion;
+            }
+        }
 
         public override void Configure(CommandLineApplication command)
         {
@@ -50,6 +103,7 @@ namespace Microsoft.EntityFrameworkCore.Tools.Commands
             WorkingDir = command.Option("--working-dir <PATH>", Resources.WorkingDirDescription);
             Framework = command.Option("--framework <FRAMEWORK>", Resources.FrameworkDescription);
             Configuration = command.Option("--configuration <CONFIGURATION>", Resources.ConfigurationDescription);
+            _designAssembly = command.Option("--design-assembly <PATH>", Resources.DesignAssemblyDescription);
 
             base.Configure(command);
         }
