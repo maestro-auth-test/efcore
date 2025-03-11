@@ -3440,6 +3440,90 @@ SELECT @@ROWCOUNT');
 """);
     }
 
+    public override async Task Multiop_drop_table_and_create_the_same_table_in_one_migration()
+    {
+        await base.Multiop_drop_table_and_create_the_same_table_in_one_migration();
+
+        AssertSql(
+            """
+DROP TABLE [Customers];
+""",
+            //
+            """
+CREATE TABLE [Customers] (
+    [Id] int NOT NULL IDENTITY,
+    [Name] nvarchar(max) NULL,
+    CONSTRAINT [PK_Customers] PRIMARY KEY ([Id])
+);
+""");
+    }
+
+    public override async Task Multiop_create_table_and_drop_it_in_one_migration()
+    {
+        await base.Multiop_create_table_and_drop_it_in_one_migration();
+
+        AssertSql(
+            """
+CREATE TABLE [Customers] (
+    [Id] int NOT NULL IDENTITY,
+    [Name] nvarchar(max) NULL,
+    CONSTRAINT [PK_Customers] PRIMARY KEY ([Id])
+);
+""",
+            //
+            """
+DROP TABLE [Customers];
+""");
+    }
+
+    public override async Task Multiop_rename_table_and_drop()
+    {
+        await base.Multiop_rename_table_and_drop();
+
+        AssertSql(
+            """
+ALTER TABLE [Customers] DROP CONSTRAINT [PK_Customers];
+""",
+            //
+            """
+EXEC sp_rename N'[Customers]', N'NewCustomers', 'OBJECT';
+""",
+            //
+            """
+ALTER TABLE [NewCustomers] ADD CONSTRAINT [PK_NewCustomers] PRIMARY KEY ([Id]);
+""",
+            //
+            """
+DROP TABLE [NewCustomers];
+""");
+    }
+
+    public override async Task Multiop_rename_table_and_create_new_table_with_the_old_name()
+    {
+        await base.Multiop_rename_table_and_create_new_table_with_the_old_name();
+
+        AssertSql(
+            """
+ALTER TABLE [Customers] DROP CONSTRAINT [PK_Customers];
+""",
+            //
+            """
+EXEC sp_rename N'[Customers]', N'NewCustomers', 'OBJECT';
+""",
+            //
+            """
+ALTER TABLE [NewCustomers] ADD CONSTRAINT [PK_NewCustomers] PRIMARY KEY ([Id]);
+""",
+            //
+            """
+CREATE TABLE [Customers] (
+    [Id] int NOT NULL IDENTITY,
+    [Name] nvarchar(max) NULL,
+    CONSTRAINT [PK_Customers] PRIMARY KEY ([Id])
+);
+""");
+    }
+
     [ConditionalFact]
     public virtual async Task Create_temporal_table_default_column_mappings_and_default_history_table()
     {

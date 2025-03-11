@@ -3256,6 +3256,122 @@ public abstract class MigrationsTestBase<TFixture> : IClassFixture<TFixture>
                     Assert.Single(customersTable.PrimaryKey!.Columns));
             });
 
+    [ConditionalFact]
+    public virtual Task Multiop_drop_table_and_create_the_same_table_in_one_migration()
+        => TestComposite(
+            [
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+                        e.ToTable("Customers");
+                    }),
+                builder => { },
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("Customers");
+                    })
+                ],
+            model => { });
+
+    [ConditionalFact]
+    public virtual Task Multiop_create_table_and_drop_it_in_one_migration()
+        => TestComposite(
+            [
+                builder => { },
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("Customers");
+                    }),
+                builder => { },
+                ],
+            model => { });
+
+    [ConditionalFact]
+    public virtual Task Multiop_rename_table_and_drop()
+        => TestComposite(
+            [
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("Customers");
+                    }),
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("NewCustomers");
+                    }),
+                builder => { },
+                ],
+            model => { });
+
+    [ConditionalFact]
+    public virtual Task Multiop_rename_table_and_create_new_table_with_the_old_name()
+        => TestComposite(
+            [
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("Customers");
+                    }),
+                builder => builder.Entity(
+                    "Customer", e =>
+                    {
+                        e.Property<int>("Id").ValueGeneratedOnAdd();
+                        e.Property<string>("Name");
+                        e.HasKey("Id");
+
+                        e.ToTable("NewCustomers");
+                    }),
+                builder =>
+                {
+                    builder.Entity(
+                        "Customer", e =>
+                        {
+                            e.Property<int>("Id").ValueGeneratedOnAdd();
+                            e.Property<string>("Name");
+                            e.HasKey("Id");
+
+                            e.ToTable("NewCustomers");
+                        });
+
+                    builder.Entity(
+                        "AnotherCustomer", e =>
+                        {
+                            e.Property<int>("Id").ValueGeneratedOnAdd();
+                            e.Property<string>("Name");
+                            e.HasKey("Id");
+
+                            e.ToTable("Customers");
+                        });
+                },
+                ],
+            model => { });
+
     protected class Person
     {
         public int Id { get; set; }
@@ -3304,6 +3420,62 @@ public abstract class MigrationsTestBase<TFixture> : IClassFixture<TFixture>
         bool withConventions = true,
         MigrationsSqlGenerationOptions migrationsSqlGenerationOptions = MigrationsSqlGenerationOptions.Default)
         => Test(_ => { }, buildSourceAction, buildTargetAction, asserter, withConventions, migrationsSqlGenerationOptions);
+
+    protected virtual Task TestComposite(
+        List<Action<ModelBuilder>> buildActions,
+        Action<DatabaseModel> asserter,
+        bool withConventions = true,
+        MigrationsSqlGenerationOptions migrationsSqlGenerationOptions = MigrationsSqlGenerationOptions.Default)
+    {
+        if (buildActions.Count < 3)
+        {
+            throw new InvalidOperationException("You need at least 3 build actions for the composite case.");
+        }
+
+        var context = CreateContext();
+        var modelDiffer = context.GetService<IMigrationsModelDiffer>();
+        var modelRuntimeInitializer = context.GetService<IModelRuntimeInitializer>();
+
+        var models = new List<IModel>();
+        var preSnapshotSourceModel = default(IModel);
+        for (var i = 0; i < buildActions.Count; i++)
+        {
+            var modelBuilder = CreateModelBuilder(withConventions);
+            buildActions[i](modelBuilder);
+
+            var preSnapshotModel = modelRuntimeInitializer.Initialize(
+                (IModel)modelBuilder.Model, designTime: true, validationLogger: null);
+
+            if (i == 0)
+            {
+                // Round-trip the source model through a snapshot, compiling it and then extracting it back again.
+                // This simulates the real-world migration flow and can expose errors in snapshot generation
+                // we only do this for the starting model, the subsequent models are just for generating funky migration operations
+                // in the scenario that we want to simulate, those additional models would not have been backed up by the model snapshot
+                // as they either were manually added migration ops, or result of squashing
+                var migrationsCodeGenerator = Fixture.TestHelpers.CreateDesignServiceProvider().GetRequiredService<IMigrationsCodeGenerator>();
+                var sourceModelSnapshot = migrationsCodeGenerator.GenerateSnapshot(
+                    modelSnapshotNamespace: null, typeof(DbContext), "MigrationsTestSnapshot", preSnapshotModel);
+                var sourceModel = BuildModelFromSnapshotSource(sourceModelSnapshot);
+                models.Add(sourceModel);
+                preSnapshotSourceModel = preSnapshotModel;
+            }
+            else
+            {
+                models.Add(preSnapshotModel);
+            }
+        }
+
+        // build all migration operations going through each intermediate state of the model
+        var operations = new List<MigrationOperation>();
+        for (var i = 0; i < models.Count - 1; i++)
+        {
+            operations.AddRange(
+                modelDiffer.GetDifferences(models[i].GetRelationalModel(), models[i + 1].GetRelationalModel()));
+        }
+
+        return Test(preSnapshotSourceModel, models.Last(), operations, asserter, migrationsSqlGenerationOptions);
+    }
 
     protected virtual Task Test(
         Action<ModelBuilder> buildCommonAction,
