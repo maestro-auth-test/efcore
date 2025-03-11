@@ -888,8 +888,10 @@ public class InMemoryExpressionTranslatingExpressionVisitor : ExpressionVisitor
         if (methodCallExpression.Object != null
             && @object!.Type.IsNullableType()
             && methodCallExpression.Method.Name != nameof(Nullable<int>.GetValueOrDefault)
-            && (!@object!.Type.IsNullableValueType()
-                || methodCallExpression.Method.Name != nameof(Nullable<int>.ToString)))
+            && !(@object!.Type.IsNullableValueType()
+                && methodCallExpression.Method.Name == nameof(Nullable<int>.ToString)
+                && methodCallExpression.Method.DeclaringType != null
+                && methodCallExpression.Method.DeclaringType.IsNullableValueType()))
         {
             var result = (Expression)methodCallExpression.Update(
                 Expression.Convert(@object, methodCallExpression.Object.Type),
